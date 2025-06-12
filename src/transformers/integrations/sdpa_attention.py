@@ -1,6 +1,7 @@
 from typing import Optional, Tuple
 
 import torch
+from transformers import is_torch_npu_available
 
 from ..utils import logging
 
@@ -62,6 +63,10 @@ def sdpa_attention_forward(
     # We convert it to a bool for the SDPA kernel that only accepts bools.
     if torch.jit.is_tracing() and isinstance(is_causal, torch.Tensor):
         is_causal = is_causal.item()
+
+    if is_torch_npu_available():
+        is_causal = True
+        attention_mask = None
 
     attn_output = torch.nn.functional.scaled_dot_product_attention(
         query,

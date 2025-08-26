@@ -308,10 +308,7 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         #     q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), attention_mask, dropout_p=0.0
         # )
 
-        if attention_mask.dtype == torch.bool:
-            atten_mask_npu = torch.logical_not(attention_mask.bool()).to(q.device) # atten_mask需要取反
-        else:
-            atten_mask_npu = attention_mask.bool().to(q.device)
+        atten_mask_npu= torch.triu(torch.ones([2048, 2048]), diagonal=1).bool().to(q.device)
         head_num = q.shape[1]
         attn_output = torch_npu.npu_fusion_attention(
             q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), head_num, input_layout="BNSD",
@@ -977,33 +974,21 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         #     is_causal=is_causal,
         # )
 
-        if is_causal:
-            if attention_mask.dtype == torch.bool:
-                atten_mask_npu = torch.logical_not(attention_mask.bool()).to(query_states.device) # atten_mask需要取反
-            else:
-                atten_mask_npu = attention_mask.bool().to(query_states.device)
-            head_num = query_states.shape[1]
-            attn_output = torch_npu.npu_fusion_attention(
-                query_states, key_states, value_states, head_num, input_layout="BNSD",
-                pse=None,
-                atten_mask=atten_mask_npu,
-                scale=1.0 / math.sqrt(query_states.shape[-1]),
-                pre_tockens=2147483647,
-                next_tockens=2147483647,
-                keep_prob=1
-            )[0]
+        if causal_mask.dtype == torch.bool:
+            atten_mask_npu = torch.logical_not(causal_mask.bool()).to(query_states.device) # atten_mask需要取反
         else:
-            atten_mask_npu = torch.triu(torch.ones([2048, 2048]), diagonal=1).bool().to(query_states.device)
-            head_num = query_states.shape[1]
-            attn_output = torch_npu.npu_fusion_attention(
-                query_states, key_states, value_states, head_num, input_layout="BNSD",
-                pse=None,
-                atten_mask=atten_mask_npu,
-                scale=1.0 / math.sqrt(query_states.shape[-1]),
-                pre_tockens=2147483647,
-                next_tockens=2147483647,
-                keep_prob=1,
-                sparse_mode=2)[0]
+            atten_mask_npu = causal_mask.bool().to(query_states.device)
+        head_num = query_states.shape[1]
+        attn_output = torch_npu.npu_fusion_attention(
+            query_states, key_states, value_states, head_num, input_layout="BNSD",
+            pse=None,
+            atten_mask=atten_mask_npu,
+            scale=1.0 / math.sqrt(query_states.shape[-1]),
+            pre_tockens=2147483647,
+            next_tockens=2147483647,
+            keep_prob=1
+        )[0]
+
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)

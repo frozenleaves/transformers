@@ -28,6 +28,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import torch_npu
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -303,9 +304,25 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
-        attn_output = F.scaled_dot_product_attention(
-            q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), attention_mask, dropout_p=0.0
-        )
+        # attn_output = F.scaled_dot_product_attention(
+        #     q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), attention_mask, dropout_p=0.0
+        # )
+
+        if attention_mask.dtype == torch.bool:
+            atten_mask_npu = torch.logical_not(attention_mask.bool()).to(q.device) # atten_mask需要取反
+        else:
+            atten_mask_npu = attention_mask.bool().to(q.device)
+        head_num = q.shape[1]
+        attn_output = torch_npu.npu_fusion_attention(
+            q, k, v, head_num, input_layout="BNSD",
+            pse=None,
+            atten_mask=atten_mask_npu,
+            scale=1.0 / math.sqrt(q.shape[-1]),
+            pre_tockens=2147483647,
+            next_tockens=2147483647,
+            keep_prob=1
+        )[0]
+
         attn_output = attn_output.squeeze(0).transpose(0, 1)
         attn_output = attn_output.reshape(seq_length, -1)
         attn_output = self.proj(attn_output)
@@ -941,7 +958,7 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
 
         # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
         # Reference: https://github.com/pytorch/pytorch/issues/112577.
-        if query_states.device.type == "cuda" and attention_mask is not None:
+        if query_states.device.type == "npu" and attention_mask is not None:
             query_states = query_states.contiguous()
             key_states = key_states.contiguous()
             value_states = value_states.contiguous()
@@ -951,14 +968,42 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
         is_causal = True if causal_mask is None and q_len > 1 else False
 
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query_states,
-            key_states,
-            value_states,
-            attn_mask=causal_mask,
-            dropout_p=self.attention_dropout if self.training else 0.0,
-            is_causal=is_causal,
-        )
+        # attn_output = torch.nn.functional.scaled_dot_product_attention(
+        #     query_states,
+        #     key_states,
+        #     value_states,
+        #     attn_mask=causal_mask,
+        #     dropout_p=self.attention_dropout if self.training else 0.0,
+        #     is_causal=is_causal,
+        # )
+
+        if is_causal:
+            if attention_mask.dtype == torch.bool:
+                atten_mask_npu = torch.logical_not(attention_mask.bool()).to(query_states.device) # atten_mask需要取反
+            else:
+                atten_mask_npu = attention_mask.bool().to(query_states.device)
+            head_num = query_states.shape[1]
+            attn_output = torch_npu.npu_fusion_attention(
+                query_states, key_states, value_states, head_num, input_layout="BNSD",
+                pse=None,
+                atten_mask=atten_mask_npu,
+                scale=1.0 / math.sqrt(query_states.shape[-1]),
+                pre_tockens=2147483647,
+                next_tockens=2147483647,
+                keep_prob=1
+            )[0]
+        else:
+            atten_mask_npu = torch.triu(torch.ones([2048, 2048]), diagonal=1).bool().to(query_states.device)
+            head_num = query_states.shape[1]
+            attn_output = torch_npu.npu_fusion_attention(
+                query_states, key_states, value_states, head_num, input_layout="BNSD",
+                pse=None,
+                atten_mask=atten_mask_npu,
+                scale=1.0 / math.sqrt(query_states.shape[-1]),
+                pre_tockens=2147483647,
+                next_tockens=2147483647,
+                keep_prob=1,
+                sparse_mode=2)[0]
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)

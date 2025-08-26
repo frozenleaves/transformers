@@ -70,7 +70,9 @@ class Qwen2_5_VLMLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_state):
-        return self.down_proj(self.act_fn(self.gate_proj(hidden_state)) * self.up_proj(hidden_state))
+        return self.down_proj(
+            torch_npu.npu_swiglu(torch.cat((self.gate_proj(hidden_state), self.up_proj(hidden_state)), dim=-1), dim=-1)
+        )
 
 
 class Qwen2_5_VisionPatchEmbed(nn.Module):
@@ -121,11 +123,7 @@ class Qwen2RMSNorm(nn.Module):
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        return torch_npu.npu_rms_norm(hidden_states, self.weight, epsilon=self.variance_epsilon)[0]
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
@@ -304,21 +302,22 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
-        # attn_output = F.scaled_dot_product_attention(
-        #     q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), attention_mask, dropout_p=0.0
-        # )
+        attn_output = F.scaled_dot_product_attention(
+            q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), attention_mask, dropout_p=0.0
+        )
 
-        atten_mask_npu= torch.triu(torch.ones([2048, 2048]), diagonal=1).bool().to(q.device)
-        head_num = q.shape[1]
-        attn_output = torch_npu.npu_fusion_attention(
-            q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), head_num, input_layout="BNSD",
-            pse=None,
-            atten_mask=atten_mask_npu,
-            scale=1.0 / math.sqrt(q.shape[-1]),
-            pre_tockens=2147483647,
-            next_tockens=2147483647,
-            keep_prob=1
-        )[0]
+        # atten_mask_npu= torch.triu(torch.ones([2048, 2048]), diagonal=1).bool().to(q.device)
+        # head_num = q.shape[1]
+        # attn_output = torch_npu.npu_fusion_attention(
+        #     q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), head_num, input_layout="BNSD",
+        #     pse=None,
+        #     sparse_mode=2,
+        #     atten_mask=atten_mask_npu,
+        #     scale=1.0 / math.sqrt(q.shape[-1]),
+        #     pre_tockens=2147483647,
+        #     next_tockens=2147483647,
+        #     keep_prob=1
+        # )[0]
 
         attn_output = attn_output.squeeze(0).transpose(0, 1)
         attn_output = attn_output.reshape(seq_length, -1)
@@ -614,8 +613,9 @@ class Qwen2MLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
-        down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
-        return down_proj
+        return self.down_proj(
+            torch_npu.npu_swiglu(torch.cat((self.gate_proj(x), self.up_proj(x)), dim=-1), dim=-1)
+        )
 
 
 def apply_multimodal_rotary_pos_emb(q, k, cos, sin, mrope_section, unsqueeze_dim=1):
@@ -973,21 +973,34 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         #     dropout_p=self.attention_dropout if self.training else 0.0,
         #     is_causal=is_causal,
         # )
-
-        if causal_mask.dtype == torch.bool:
-            atten_mask_npu = torch.logical_not(causal_mask.bool()).to(query_states.device) # atten_mask需要取反
+        if is_causal:
+            atten_mask_npu = torch.triu(torch.ones([2048, 2048]), diagonal=1).bool().to(query_states.device)
+            head_num = query_states.shape[1]
+            attn_output = torch_npu.npu_fusion_attention(
+                query_states, key_states, value_states, head_num, input_layout="BNSD",
+                pse=None,
+                atten_mask=atten_mask_npu,
+                sparse_mode=2,
+                scale=1.0 / math.sqrt(query_states.shape[-1]),
+                pre_tockens=2147483647,
+                next_tockens=2147483647,
+                keep_prob=1,
+            )[0]
         else:
-            atten_mask_npu = causal_mask.bool().to(query_states.device)
-        head_num = query_states.shape[1]
-        attn_output = torch_npu.npu_fusion_attention(
-            query_states, key_states, value_states, head_num, input_layout="BNSD",
-            pse=None,
-            atten_mask=atten_mask_npu,
-            scale=1.0 / math.sqrt(query_states.shape[-1]),
-            pre_tockens=2147483647,
-            next_tockens=2147483647,
-            keep_prob=1
-        )[0]
+            if causal_mask.dtype == torch.bool:
+                atten_mask_npu = torch.logical_not(causal_mask.bool()).to(query_states.device) # atten_mask需要取反
+            else:
+                atten_mask_npu = causal_mask.bool().to(query_states.device)
+            head_num = query_states.shape[1]
+            attn_output = torch_npu.npu_fusion_attention(
+                query_states, key_states, value_states, head_num, input_layout="BNSD",
+                pse=None,
+                atten_mask=atten_mask_npu,
+                scale=1.0 / math.sqrt(query_states.shape[-1]),
+                pre_tockens=2147483647,
+                next_tockens=2147483647,
+                keep_prob=1
+            )[0]
 
 
         attn_output = attn_output.transpose(1, 2).contiguous()

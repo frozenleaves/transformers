@@ -314,7 +314,7 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
             atten_mask_npu = attention_mask.bool().to(q.device)
         head_num = q.shape[1]
         attn_output = torch_npu.npu_fusion_attention(
-            q, k, v, head_num, input_layout="BNSD",
+            q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), head_num, input_layout="BNSD",
             pse=None,
             atten_mask=atten_mask_npu,
             scale=1.0 / math.sqrt(q.shape[-1]),

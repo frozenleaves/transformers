@@ -302,22 +302,22 @@ class Qwen2_5_VLVisionSdpaAttention(nn.Module):
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
-        attn_output = F.scaled_dot_product_attention(
-            q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), attention_mask, dropout_p=0.0
-        )
+        # attn_output = F.scaled_dot_product_attention(
+        #     q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), attention_mask, dropout_p=0.0
+        # )
 
         # atten_mask_npu= torch.triu(torch.ones([2048, 2048]), diagonal=1).bool().to(q.device)
-        # head_num = q.shape[1]
-        # attn_output = torch_npu.npu_fusion_attention(
-        #     q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), head_num, input_layout="BNSD",
-        #     pse=None,
-        #     sparse_mode=2,
-        #     atten_mask=atten_mask_npu,
-        #     scale=1.0 / math.sqrt(q.shape[-1]),
-        #     pre_tockens=2147483647,
-        #     next_tockens=2147483647,
-        #     keep_prob=1
-        # )[0]
+        head_num = q.shape[1]
+        attn_output = torch_npu.npu_fusion_attention(
+            q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), head_num, input_layout="BNSD",
+            pse=None,
+            sparse_mode=2,
+            atten_mask=None,
+            scale=1.0 / math.sqrt(q.shape[-1]),
+            pre_tockens=2147483647,
+            next_tockens=2147483647,
+            keep_prob=1
+        )[0]
 
         attn_output = attn_output.squeeze(0).transpose(0, 1)
         attn_output = attn_output.reshape(seq_length, -1)

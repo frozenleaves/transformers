@@ -958,8 +958,8 @@ class Qwen2_5_VLFlashAttention2_NPU(Qwen2_5_VLAttention):
             scale=scale_value,
             keep_prob=1.0,
             input_layout="BNSD",
-            actual_seq_qlen=self.actual_seq_len,
-            actual_seq_kvlen=self.actual_seq_len,
+            pre_tockens=2147483647,
+            next_tockens=2147483647,
             sparse_mode=0
         )[0]
 

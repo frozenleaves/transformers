@@ -770,8 +770,12 @@ def apply_multimodal_rotary_pos_emb(q, k, cos, sin, mrope_section, unsqueeze_dim
         unsqueeze_dim
     )
 
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    # q_embed = (q * cos) + (rotate_half(q) * sin)
+    # k_embed = (k * cos) + (rotate_half(k) * sin)
+
+    q_embed = torch_npu.npu_rotary_mul(q, cos, sin)
+    k_embed = torch_npu.npu_rotary_mul(k, cos, sin)
+
     return q_embed, k_embed
 
 
@@ -884,6 +888,82 @@ class Qwen2_5_VLAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, -1)
 
+        attn_output = self.o_proj(attn_output)
+
+        if not output_attentions:
+            attn_weights = None
+
+        return attn_output, attn_weights, past_key_value
+
+
+class Qwen2_5_VLFlashAttention2_NPU(Qwen2_5_VLAttention):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+    def forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            past_key_value: Optional[Cache] = None,
+            output_attentions: bool = False,
+            use_cache: bool = False,
+            cache_position: Optional[torch.LongTensor] = None,
+            position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+    ):
+
+        bsz, q_len, _ = hidden_states.size()
+
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+        query_states = query_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
+
+        # Because the input can be padded, the absolute sequence length depends on the max position id.
+        cos, sin = position_embeddings
+        query_states, key_states = apply_multimodal_rotary_pos_emb(
+            query_states, key_states, cos, sin, self.rope_scaling["mrope_section"]
+        )
+
+        if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        # repeat k/v heads if n_kv_heads < n_heads
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+        # 准备NPU融合注意力参数
+        head_num = query_states.shape[1]
+        scale_value = 1.0 / math.sqrt(query_states.size(-1))
+
+        if attention_mask.dtype == torch.bool:
+            attention_mask = torch.logical_not(attention_mask.bool()).to(query_states.device)
+        else:
+            attention_mask = attention_mask.bool().to(query_states.device)
+
+        # 调用NPU融合注意力算子
+        attn_output = torch_npu.npu_fusion_attention(
+            query_states,
+            key_states,
+            value_states,
+            head_num,
+            pse=None,
+            padding_mask=None,
+            atten_mask=attention_mask,
+            is_causal=False,# 非causal模式
+            scale=scale_value,
+            keep_prob=1.0,
+            input_layout="BNSD",
+            actual_seq_qlen=self.actual_seq_len,
+            actual_seq_kvlen=self.actual_seq_len,
+            sparse_mode=0
+        )[0]
+
+        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
@@ -1095,7 +1175,8 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
 
 
 QWEN2_5_VL_ATTENTION_CLASSES = {
-    "eager": Qwen2_5_VLAttention,
+    # "eager": Qwen2_5_VLAttention,
+    "eager": Qwen2_5_VLFlashAttention2_NPU,
     "flash_attention_2": Qwen2_5_VLFlashAttention2,
     "sdpa": Qwen2_5_VLSdpaAttention,
 }

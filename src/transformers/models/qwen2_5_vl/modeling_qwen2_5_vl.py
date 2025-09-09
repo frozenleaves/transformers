@@ -901,17 +901,16 @@ class Qwen2_5_VLFlashAttention2_NPU(Qwen2_5_VLAttention):
         super().__init__(*args, **kwargs)
 
     def forward(
-            self,
-            hidden_states: torch.Tensor,
-            attention_mask: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.LongTensor] = None,
-            past_key_value: Optional[Cache] = None,
-            output_attentions: bool = False,
-            use_cache: bool = False,
-            cache_position: Optional[torch.LongTensor] = None,
-            position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        cache_position: Optional[torch.LongTensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
     ):
-
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states)
@@ -936,30 +935,48 @@ class Qwen2_5_VLFlashAttention2_NPU(Qwen2_5_VLAttention):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        # 准备NPU融合注意力参数
-        head_num = query_states.shape[1]
-        scale_value = 1.0 / math.sqrt(query_states.size(-1))
+        # In PEFT, usually we cast the layer norms in float32 for training stability reasons
+        # therefore the input hidden states gets silently casted in float32. Hence, we need
+        # cast them back in float16 just to be sure everything works as expected.
+        input_dtype = query_states.dtype
+        if input_dtype == torch.float32:
+            if torch.is_autocast_enabled():
+                target_dtype = torch.get_autocast_gpu_dtype()
+            # Handle the case where the model is quantized
+            elif hasattr(self.config, "_pre_quantization_dtype"):
+                target_dtype = self.config._pre_quantization_dtype
+            else:
+                target_dtype = self.q_proj.weight.dtype
+
+            logger.warning_once(
+                f"The input hidden states seems to be silently casted in float32, this might be related to"
+                f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
+                f" {target_dtype}."
+            )
+
+            query_states = query_states.to(target_dtype)
+            key_states = key_states.to(target_dtype)
+            value_states = value_states.to(target_dtype)
+
+        # Reashape to the expected shape for Flash Attention
+        query_states = query_states.transpose(1, 2)
+        key_states = key_states.transpose(1, 2)
+        value_states = value_states.transpose(1, 2)
+
 
         if attention_mask.dtype == torch.bool:
-            attention_mask = torch.logical_not(attention_mask.bool()).to(query_states.device)
+            atten_mask_npu = torch.logical_not(attention_mask.bool()).to(query_states.device)
         else:
-            attention_mask = attention_mask.bool().to(query_states.device)
-
-        # 调用NPU融合注意力算子
+            atten_mask_npu = attention_mask.bool().to(query_states.device)
+        head_num = query_states.shape[1]
         attn_output = torch_npu.npu_fusion_attention(
-            query_states,
-            key_states,
-            value_states,
-            head_num,
+            query_states, key_states, value_states, head_num, input_layout="BNSD",
             pse=None,
-            padding_mask=None,
-            atten_mask=attention_mask,
-            scale=scale_value,
-            keep_prob=1.0,
-            input_layout="BNSD",
+            atten_mask=atten_mask_npu,
+            scale=1.0 / math.sqrt(query_states.shape[-1]),
             pre_tockens=2147483647,
             next_tockens=2147483647,
-            sparse_mode=0
+            keep_prob=1
         )[0]
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()

@@ -954,7 +954,6 @@ class Qwen2_5_VLFlashAttention2_NPU(Qwen2_5_VLAttention):
             pse=None,
             padding_mask=None,
             atten_mask=attention_mask,
-            is_causal=False,# 非causal模式
             scale=scale_value,
             keep_prob=1.0,
             input_layout="BNSD",

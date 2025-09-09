@@ -963,11 +963,15 @@ class Qwen2_5_VLFlashAttention2_NPU(Qwen2_5_VLAttention):
         key_states = key_states.transpose(1, 2)
         value_states = value_states.transpose(1, 2)
 
+        causal_mask = attention_mask
+        if attention_mask is not None:  # no matter the length, we just slice it
+            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
 
-        if attention_mask.dtype == torch.bool:
-            atten_mask_npu = torch.logical_not(attention_mask.bool()).to(query_states.device)
+
+        if causal_mask.dtype == torch.bool:
+            atten_mask_npu = torch.logical_not(causal_mask.bool()).to(query_states.device)
         else:
-            atten_mask_npu = attention_mask.bool().to(query_states.device)
+            atten_mask_npu = causal_mask.bool().to(query_states.device)
         head_num = query_states.shape[1]
         attn_output = torch_npu.npu_fusion_attention(
             query_states, key_states, value_states, head_num, input_layout="BNSD",

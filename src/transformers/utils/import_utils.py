@@ -308,6 +308,27 @@ def is_torch_npu_available(check_device=False) -> bool:
 
 
 @lru_cache
+def is_torch_supa_available(check_device=False) -> bool:
+    "Checks if `torch_supa` is installed and potentially if a SUPA device is in the environment"
+    if not is_torch_available() or not _is_package_available("torch_supa")[0]:
+        return False
+
+    import torch
+    import torch_supa  # noqa: F401
+
+    if check_device:
+        try:
+            # Will raise a RuntimeError if no SUPA device is found
+            if hasattr(torch, "supa"):
+                _ = torch.supa.device_count()
+                return torch.supa.is_available()
+            return False
+        except RuntimeError:
+            return False
+    return hasattr(torch, "supa") and torch.supa.is_available()
+
+
+@lru_cache
 def is_torch_xpu_available(check_device: bool = False) -> bool:
     """
     Checks if XPU acceleration is available via stock PyTorch (>=2.6) and
@@ -558,6 +579,8 @@ def is_torch_bf16_gpu_available() -> bool:
         return True
     if is_torch_npu_available() and hasattr(torch, "npu"):
         return torch.npu.is_bf16_supported()
+    if is_torch_supa_available() and hasattr(torch, "supa"):
+        return torch.supa.is_bf16_supported()
     if is_torch_mps_available():
         # Note: Emulated in software by Metal using fp32 for hardware without native support (like M1/M2)
         return torch.backends.mps.is_macos_or_newer(14, 0)

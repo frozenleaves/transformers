@@ -235,6 +235,7 @@ from .import_utils import (
     is_torch_neuroncore_available,
     is_torch_npu_available,
     is_torch_optimi_available,
+    is_torch_supa_available,
     is_torch_tensorrt_fx_available,
     is_torch_tf32_available,
     is_torch_tpu_available,
@@ -330,6 +331,9 @@ def get_available_devices() -> frozenset[str]:
 
     if is_torch_npu_available():
         devices.add("npu")
+
+    if is_torch_supa_available():
+        devices.add("supa")
 
     if is_torch_hpu_available():
         devices.add("hpu")

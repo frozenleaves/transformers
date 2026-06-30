@@ -85,6 +85,7 @@ def initialize_tensor_parallelism(
                     "hpu": "hccl",
                     "neuron": "neuron",
                     "tpu": "tpu_dist",
+                    "supa": "bccl",
                 }
                 backend = backend_map.get(device_type)
 

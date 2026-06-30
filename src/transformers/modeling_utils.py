@@ -5064,7 +5064,7 @@ def caching_allocator_warmup(model: PreTrainedModel, expanded_device_map: dict, 
 
     # This will kick off the caching allocator to avoid having to Malloc afterwards
     for device, byte_count in total_byte_count.items():
-        if device.type in ["cuda", "xpu"]:
+        if device.type in ["cuda", "xpu", "supa"]:
             accelerator_module = getattr(torch, device.type)
             index = device.index if device.index is not None else accelerator_module.current_device()
             free_device_memory, total_device_memory = accelerator_module.mem_get_info(index)

@@ -47,6 +47,7 @@ from .utils import (
     is_torch_neuron_available,
     is_torch_neuroncore_available,
     is_torch_npu_available,
+    is_torch_supa_available,
     is_torch_tf32_available,
     is_torch_tpu_available,
     is_torch_xla_available,
@@ -1363,8 +1364,8 @@ class TrainingArguments:
     ddp_backend: str | None = field(
         default=None,
         metadata={
-            "help": "The backend to use for distributed training. Must be one of 'nccl', 'mpi', 'xccl', 'gloo', 'hccl'.",
-            "choices": ["nccl", "gloo", "mpi", "xccl", "hccl", "cncl", "mccl"],
+            "help": "The backend to use for distributed training. Must be one of 'nccl', 'mpi', 'xccl', 'gloo', 'hccl', 'bccl'.",
+            "choices": ["nccl", "gloo", "mpi", "xccl", "hccl", "cncl", "mccl", "bccl"],
         },
     )
     ddp_timeout: int = field(
@@ -1861,6 +1862,9 @@ class TrainingArguments:
             elif is_torch_npu_available():
                 device = torch.device("npu:0")
                 torch.npu.set_device(device)
+            elif is_torch_supa_available():
+                device = torch.device("supa:0")
+                torch.supa.set_device(device)
             elif is_torch_hpu_available():
                 device = torch.device("hpu:0")
                 torch.hpu.set_device(device)

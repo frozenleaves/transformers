@@ -48,6 +48,7 @@ from .utils import (
     is_torch_mps_available,
     is_torch_musa_available,
     is_torch_npu_available,
+    is_torch_supa_available,
     is_torch_xla_available,
     is_torch_xpu_available,
     logging,
@@ -201,6 +202,8 @@ def set_seed(seed: int, deterministic: bool = False):
         torch.musa.manual_seed_all(seed)
     if is_torch_npu_available():
         torch.npu.manual_seed_all(seed)
+    if is_torch_supa_available():
+        torch.supa.manual_seed_all(seed)
     if is_torch_hpu_available():
         torch.hpu.manual_seed_all(seed)
     if is_torch_xpu_available():
@@ -654,6 +657,11 @@ class TrainerMemoryTracker:
 
             self.torch = torch
             self.gpu = {}
+        elif is_torch_supa_available():
+            import torch
+
+            self.torch = torch
+            self.gpu = {}
         elif is_torch_hpu_available():
             import torch
 
@@ -724,6 +732,9 @@ class TrainerMemoryTracker:
             elif is_torch_npu_available():
                 self.torch.npu.reset_peak_memory_stats()
                 self.torch.npu.empty_cache()
+            elif is_torch_supa_available():
+                self.torch.supa.reset_peak_memory_stats()
+                self.torch.supa.empty_cache()
             elif is_torch_hpu_available():
                 self.torch.hpu.reset_peak_memory_stats()
                 # not available on hpu as it reserves all device memory for the current process
@@ -743,6 +754,8 @@ class TrainerMemoryTracker:
                 self.gpu_mem_used_at_start = self.torch.xpu.memory_allocated()
             elif is_torch_npu_available():
                 self.gpu_mem_used_at_start = self.torch.npu.memory_allocated()
+            elif is_torch_supa_available():
+                self.gpu_mem_used_at_start = self.torch.supa.memory_allocated()
             elif is_torch_hpu_available():
                 self.gpu_mem_used_at_start = self.torch.hpu.memory_allocated()
             elif is_torch_mps_available():
@@ -780,6 +793,8 @@ class TrainerMemoryTracker:
                 self.torch.xpu.empty_cache()
             elif is_torch_npu_available():
                 self.torch.npu.empty_cache()
+            elif is_torch_supa_available():
+                self.torch.supa.empty_cache()
             elif is_torch_hpu_available():
                 # not available on hpu as it reserves all device memory for the current process
                 # self.torch.npu.empty_cache()
@@ -809,6 +824,9 @@ class TrainerMemoryTracker:
             elif is_torch_npu_available():
                 self.gpu_mem_used_now = self.torch.npu.memory_allocated()
                 self.gpu_mem_used_peak = self.torch.npu.max_memory_allocated()
+            elif is_torch_supa_available():
+                self.gpu_mem_used_now = self.torch.supa.memory_allocated()
+                self.gpu_mem_used_peak = self.torch.supa.max_memory_allocated()
             elif is_torch_hpu_available():
                 self.gpu_mem_used_now = self.torch.hpu.memory_allocated()
                 self.gpu_mem_used_peak = self.torch.hpu.max_memory_allocated()

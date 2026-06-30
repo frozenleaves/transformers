@@ -173,6 +173,7 @@ from .utils import (
     is_torch_mlu_available,
     is_torch_musa_available,
     is_torch_npu_available,
+    is_torch_supa_available,
     is_torch_xla_available,
     logging,
 )
@@ -3188,6 +3189,12 @@ class Trainer:
             else:
                 rng_states["npu"] = torch.npu.random.get_rng_state()
 
+        if is_torch_supa_available():
+            if self.args.parallel_mode == ParallelMode.DISTRIBUTED:
+                rng_states["supa"] = torch.supa.random.get_rng_state_all()
+            else:
+                rng_states["supa"] = torch.supa.random.get_rng_state()
+
         if is_torch_hpu_available():
             if self.args.parallel_mode == ParallelMode.DISTRIBUTED:
                 rng_states["hpu"] = torch.hpu.random.get_rng_state_all()
@@ -3577,6 +3584,8 @@ class Trainer:
             set_rng_state_for_device("CUDA", torch.cuda, checkpoint_rng_state, is_distributed)
         if is_torch_npu_available():
             set_rng_state_for_device("NPU", torch.npu, checkpoint_rng_state, is_distributed)
+        if is_torch_supa_available():
+            set_rng_state_for_device("SUPA", torch.supa, checkpoint_rng_state, is_distributed)
         if is_torch_hpu_available():
             set_rng_state_for_device("HPU", torch.hpu, checkpoint_rng_state, is_distributed)
         if is_torch_mlu_available():
